@@ -1,0 +1,25 @@
+{
+    "cmake.sourceDirectory": "C:/Users/Kiko/Desktop/repos/CUDA_Optical_Flow/CUDA_Optical_Flow",
+    "files.associations": {
+        "xstring": "cpp",
+        "string": "cpp",
+        "algorithm": "cpp",
+        "charconv": "cpp",
+        "format": "cpp",
+        "istream": "cpp",
+        "ostream": "cpp",
+        "xhash": "cpp",
+        "xiosbase": "cpp",
+        "xlocale": "cpp",
+        "xlocinfo": "cpp",
+        "xlocmes": "cpp",
+        "xlocmon": "cpp",
+        "xlocnum": "cpp",
+        "xloctime": "cpp",
+        "vector": "cpp",
+        "xutility": "cpp",
+        "atomic": "cpp",
+        "cmath": "cpp"
+    },
+    "C_Cpp.errorSquiggles": "disabled"
+}
