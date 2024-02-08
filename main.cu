@@ -340,155 +340,97 @@ __global__ void convolutionGPU2D1_3CH(const unsigned char *src, unsigned char *d
     dest[pos * 3 + 2] = (unsigned char)tmp[2];
 }
 
-/// @brief The most optimized version of 2D convolution that uses tiling, unfinished
-/// @param src
-/// @param dest
-/// @param w
-/// @param h
-/// @param mw
-/// @param mh
-__global__ void convolutionGPU2D_3CH_Tiled(const unsigned char *src, unsigned char *dest, int w, int h, int mw, int mh)
-{
+__global__ void convolutionGPU2D_3CH_Tiled(const unsigned char *src, unsigned char *dest, int w, int h, int mw, int mh, int TILE_SIZE_X, int TILE_SIZE_Y){
+    //load all data
+    //Objasnuvanje za kako raboti, povekje e ova za licna upotreba
+    //Se upotrebuva maksimalniot mozhen blockSize shto e 32x32
+    //Se loadiraat site vrednosti vnatre vo toj blockSize
+    //Se koristi TILE_SIZE shto e 32-mw+1;
+    //Za da se loadiraat vrednosti nadvor od src mora da se napravat input indeksi i output indeksi
+    //Mapiranjeto na nivo na thread e out(0,0) e na TILE_SIZE, in(0,0) e na BLOCK_SIZE
+    //Site threads loadiraat, ama ako threadot e nadvor od TILE_SIZE togash ne e output thread 
 
-    __shared__ int tile[36 * 36 * 3];
+    extern __shared__ unsigned char tile[];    
 
-    int global_x = threadIdx.x + blockDim.x * blockIdx.x;
-    int global_y = threadIdx.y + blockDim.y * blockIdx.y;
-    if (global_x >= w || global_y >= h)
-    {
-        return;
-    }
-    int global_pos = global_y * w + global_x;
-
-    int local_x = threadIdx.x + 2;
-    int local_y = threadIdx.y + 2;
-    int local_pos = local_y * 36 + local_x;
-
-    // Load values
-    tile[local_pos * 3] = src[global_pos * 3];
-    tile[local_pos * 3 + 1] = src[global_pos * 3 + 1];
-    tile[local_pos * 3 + 2] = src[global_pos * 3 + 2];
-
-    int hmw = mw >> 1;
     int hmh = mh >> 1;
+    int hmw = mw >> 1;
 
-    int tmp_global_x, tmp_global_y, tmp_local_x, tmp_local_y, tmp_global_pos, tmp_local_pos;
-    // Left excess
-    if (local_x == 2)
-    {
-        for (int i = 0; i < hmw; i++)
-        {
-            tmp_global_x = global_x - i;
-            tmp_local_pos = local_pos - i;
-            if (tmp_global_x < 0)
-            {
-                tile[tmp_local_pos * 3] = tile[tmp_local_pos * 3 + 1] = tile[tmp_local_pos * 3 + 2] = 0;
-            }
-            else
-            {
-                tmp_global_pos = global_pos - i;
-                tile[tmp_local_pos * 3] = src[tmp_global_pos * 3];
-                tile[tmp_local_pos * 3 + 1] = src[tmp_global_pos * 3 + 1];
-                tile[tmp_local_pos * 3 + 2] = src[tmp_global_pos * 3 + 2];
-            }
-        }
-    }
-    // Right excess
-    if (local_x == 32 + 2 - 1)
-    {
-        for (int i = 0; i < hmw; i++)
-        {
-            tmp_global_x = global_x + i;
-            tmp_local_pos = local_pos + i;
-            if (tmp_global_x >= w)
-            {
-                tile[tmp_local_pos * 3] = tile[tmp_local_pos * 3 + 1] = tile[tmp_local_pos * 3 + 2] = 0;
-            }
-            else
-            {
-                tmp_global_pos = global_pos - i;
-                tile[tmp_local_pos * 3] = src[tmp_global_pos * 3];
-                tile[tmp_local_pos * 3 + 1] = src[tmp_global_pos * 3 + 1];
-                tile[tmp_local_pos * 3 + 2] = src[tmp_global_pos * 3 + 2];
-            }
-        }
+    int x_o = threadIdx.x + blockIdx.x * TILE_SIZE_X;
+    int y_o = threadIdx.y + blockIdx.y * TILE_SIZE_Y;
+    int pos_o = x_o + y_o * w; 
+    int x_i = x_o - hmw;
+    int y_i = y_o - hmh;
+
+    int tile_pos = threadIdx.x + threadIdx.y * blockDim.x;
+    if(x_i < 0 || x_i >= w || y_i < 0 || y_i >= h){
+        tile[tile_pos * 3] = tile[tile_pos * 3 + 1] = tile[tile_pos * 3 + 2] = 0;
+    }else{
+        int pos_i = x_i + y_i * w;
+        tile[tile_pos * 3] = src[pos_i * 3];
+        tile[tile_pos * 3 + 1] = src[pos_i * 3 + 1];
+        tile[tile_pos * 3 + 2] = src[pos_i * 3 + 2];
     }
 
-    // Top excess
-    if (local_y == 2)
-    {
-        for (int i = 0; i < hmw; i++)
-        {
-            tmp_global_y = global_y - i;
-            tmp_local_y = local_y - i;
-
-            tmp_local_pos = tmp_local_y * 36 + local_x;
-
-            if (tmp_global_y < 0)
-            {
-                tile[tmp_local_pos * 3] = tile[tmp_local_pos * 3 + 1] = tile[tmp_local_pos * 3 + 2] = 0;
-                //? Ne znam dali e ova potrebno ama better safe than sorry
-            }
-            else
-            {
-                tmp_global_pos = tmp_global_y * w + global_x;
-                tile[tmp_local_pos] = src[tmp_global_pos * 3];
-                tile[tmp_local_pos + 1] = src[tmp_global_pos * 3 + 1];
-                tile[tmp_local_pos + 2] = src[tmp_global_pos * 3 + 2];
-            }
-        }
-    }
-    // Bottom excess
-    if (local_y == 32 + 2 - 1)
-    {
-        for (int i = 0; i < hmw; i++)
-        {
-            tmp_global_y = global_y + i;
-            tmp_local_y = local_y + i;
-
-            tmp_local_pos = tmp_local_y * 36 + local_x;
-
-            if (tmp_global_y >= h)
-            {
-                tile[tmp_local_pos * 3] = tile[tmp_local_pos * 3 + 1] = tile[tmp_local_pos * 3 + 2] = 0;
-                //? Ne znam dali e ova potrebno ama better safe than sorry
-            }
-            else
-            {
-                tmp_global_pos = tmp_global_y * w + global_x;
-                tile[tmp_local_pos] = src[tmp_global_pos * 3];
-                tile[tmp_local_pos + 1] = src[tmp_global_pos * 3 + 1];
-                tile[tmp_local_pos + 2] = src[tmp_global_pos * 3 + 2];
-            }
-        }
-    }
-    // Loading finished
 
     __syncthreads();
 
-    // Now the convolution code
-    int local_start_x = local_x - hmw;
-    int local_start_y = local_y - hmh;
-    int tmp[3] = {0, 0, 0};
-    int mask_pos;
-    for (int i = 0; i < mh; i++)
-    {
-        tmp_local_y = local_start_y + i;
+    if(x_o >= w || y_o >= h){
+        return;
+    }
+    if(threadIdx.x >= TILE_SIZE_X || threadIdx.y >= TILE_SIZE_Y){
+        return;
+    }
 
-        for (int j = 0; j < mw; j++)
-        {
-            tmp_local_x = local_start_x + j;
-
-            tmp_local_pos = tmp_local_y * 36 + tmp_local_x;
-            mask_pos = i * mw + j;
-            tmp[0] += tile[tmp_local_pos * 3] * mask[mask_pos];
-            tmp[0] += tile[tmp_local_pos * 3 + 1] * mask[mask_pos];
-            tmp[0] += tile[tmp_local_pos * 3 + 2] * mask[mask_pos];
+    int tmp_x, tmp_y, tmp_pos, mask_pos;
+    float tmp[] = {0, 0, 0};
+    for(int i = 0; i < mh; i++){
+        tmp_y = threadIdx.y + i;
+        for(int j = 0; j < mw; j++){
+            tmp_x = threadIdx.x + j;
+            tmp_pos = tmp_x + tmp_y * blockDim.x;
+            mask_pos = j + i * mw;
+            tmp[0] += tile[tmp_pos * 3] * mask[mask_pos];
+            tmp[1] += tile[tmp_pos * 3 + 1] * mask[mask_pos];
+            tmp[2] += tile[tmp_pos * 3 + 2] * mask[mask_pos];
         }
     }
-    dest[global_pos * 3] = (unsigned char)tmp[0];
-    dest[global_pos * 3] = (unsigned char)tmp[1];
-    dest[global_pos * 3] = (unsigned char)tmp[2];
+    dest[pos_o * 3] = (unsigned char) tmp[0]; 
+    dest[pos_o * 3 + 1] = (unsigned char) tmp[1]; 
+    dest[pos_o * 3 + 2] = (unsigned char) tmp[2]; 
+
+    //Tile e indeksiran na nivo na block
+    //Odma gi isfrlame site outputs shto se out of bounds na src    
+    //
+}
+
+void launchCudaConvolution2D_Tiled(const unsigned char *src_h, unsigned char *dest_h, int w, int h, const float *mask_t, int mw, int mh)
+{
+
+    size_t size = w * h * 3 * sizeof(unsigned char);
+
+    unsigned char *src_d;
+    unsigned char *dest_d;
+
+    cudaMalloc((void **)&src_d, size);
+    cudaMalloc((void **)&dest_d, size);
+
+    cudaMemcpy(src_d, src_h, size, cudaMemcpyHostToDevice);
+    cudaMemcpyToSymbol(mask, mask_t, mw * mh * sizeof(float));
+
+    int NUM_OF_THREADS = 32;
+    int TILE_SIZE_X = NUM_OF_THREADS - mw + 1;
+    int TILE_SIZE_Y = NUM_OF_THREADS - mh + 1;
+    dim3 blockSize(NUM_OF_THREADS, NUM_OF_THREADS);
+    //? Mozhe da se optimizira ova
+    int GRID_SIZE_X = (int)ceil((float)w / TILE_SIZE_X);
+    int GRID_SIZE_Y = (int)ceil((float)h / TILE_SIZE_Y);
+    dim3 gridSize(GRID_SIZE_X, GRID_SIZE_Y);
+    convolutionGPU2D_3CH_Tiled<<<gridSize, blockSize, blockSize.x * blockSize.y * sizeof(unsigned char) * 3>>>(src_d, dest_d, w, h, mw, mh, TILE_SIZE_X, TILE_SIZE_Y);
+
+    cudaMemcpy(dest_h, dest_d, size, cudaMemcpyDeviceToHost);
+
+    cudaFree(src_d);
+    cudaFree(dest_d);
 }
 
 /// @brief An unoptimized CUDA kernel for 1D convolutions
@@ -599,41 +541,6 @@ void launchCudaConvolution2D_Constant(const unsigned char *src_h, unsigned char 
     cudaFree(dest_d);
 }
 
-/// @brief Launch a CUDA kernel to perform a 2D convolution with constant memory and tiling, this will only support window sizes <= 9
-/// @param src Source Matrix
-/// @param dest Destination Matrix
-/// @param w Width
-/// @param h Height
-/// @param mask_t Mask Matrix
-/// @param mw Mask Width <=5
-/// @param mh Mask Height <=5
-void launchCudaConvolution2D_Tiled(const unsigned char *src_h, unsigned char *dest_h, int w, int h, const float *mask_t, int mw, int mh)
-{
-
-    size_t size = w * h * 3 * sizeof(unsigned char);
-
-    unsigned char *src_d;
-    unsigned char *dest_d;
-
-    cudaMalloc((void **)&src_d, size);
-    cudaMalloc((void **)&dest_d, size);
-
-    cudaMemcpy(src_d, src_h, size, cudaMemcpyHostToDevice);
-    cudaMemcpyToSymbol(mask, mask_t, mw * mh * sizeof(float));
-
-    int NUM_OF_THREADS = 32;
-    dim3 blockSize(NUM_OF_THREADS, NUM_OF_THREADS);
-    int GRID_SIZE_X = (int)ceil((float)w / NUM_OF_THREADS);
-    int GRID_SIZE_Y = (int)ceil((float)h / NUM_OF_THREADS);
-    dim3 gridSize(GRID_SIZE_X, GRID_SIZE_Y);
-    convolutionGPU2D_3CH_Tiled<<<blockSize, gridSize>>>(src_d, dest_d, w, h, mw, mh);
-
-    cudaMemcpy(dest_h, dest_d, size, cudaMemcpyDeviceToHost);
-
-    cudaFree(src_d);
-    cudaFree(dest_d);
-}
-
 /// @brief Launches a CUDA kernel to perform 1D convolution, not used just made for practice
 /// @param src Sourc Array
 /// @param dest Destination Array
@@ -668,67 +575,60 @@ void launchCudaConvolution1D(const cv::Mat src, cv::Mat dest)
     cudaFree(mask_d);
 }
 
-//? Za povisokite nivoa pobrza bi bila CUDA implementacija, ama za poniskite
-//? bi trebalo da e pobrzo na CPU deka ima overhead na CUDA setup-ot so malloc i drugite cuda api povici
+void gaussianPyramidCPUOneLevel(unsigned char* src, int w, int h, unsigned char * dest){
+    int kw = 3;
+    int kh = 3;
+    int hkh = kh >> 1;
+    int hkw = kw >> 1;
+    const float * gaus_kernel = gaus_kernel_3x3;
+    
+    int pw = w << 1;
+    int ph = h << 1;
+    for (int y = 0; y < h; y++)
+    {
+        for (int x = 0; x < w; x++)
+        {
+            float tmp[3] = {0, 0, 0};
+            int start_y = (y << 1) - hkh;
+            int start_x = (x << 1) - hkw;
+            for (int p = 0; p < kh; p++)
+            {
+                for (int q = 0; q < kw; q++)
+                {
+                    int cx = start_x + q;
+                    int cy = start_y + p;
+                    if (cx >= 0 && cx < pw && cy >= 0 && cy < ph)
+                    {
+                        int mask_pos = p * kw + q;
+                        int img_pos = (cy * pw + cx) * 3;
+                        tmp[0] += gaus_kernel[mask_pos] * src[img_pos];
+                        tmp[1] += gaus_kernel[mask_pos] * src[img_pos + 1];
+                        tmp[2] += gaus_kernel[mask_pos] * src[img_pos + 2];
+                    }
+                }
+            }
+            dest[(y * w + x) * 3] = (unsigned char)tmp[0];
+            dest[(y * w + x) * 3 + 1] = (unsigned char)tmp[1];
+            dest[(y * w + x) * 3 + 2] = (unsigned char)tmp[2];
+        }
+    }
+}
+
 /// @brief Sequential Implementation of a Gaussian Pyramid, need to free each level and then whole pyramid in order to prevent memory leaks
 /// @param src
 /// @param levels
 /// @return
 void gaussianPyramidCPU(unsigned char *src, int w, int h, int levels, unsigned char **dest)
 {
-    const float *gaus_kernel = gaus_kernel_3x3;
-    int kh = 3;
-    int kw = 3;
-    int hkh = kh >> 1;
-    int hkw = kw >> 1;
-
     unsigned char **pyramid = dest;
 
-    pyramid[0] = (unsigned char *)malloc(w * h * 3 * sizeof(unsigned char));
+    memcpy(pyramid[0], src, w * h * 3 * sizeof(unsigned char));
 
-    for (int i = 0; i < w * h * 3; i++)
+    for (int i = 1; i < levels; i++)
     {
-        pyramid[0][i] = src[i];
-    }
-
-    int cw, ch, pw, ph;
-    ph = h;
-    pw = w;
-    for (int k = 1; k < levels; k++)
-    {
-        ch = ph >> 1;
-        cw = pw >> 1;
-        pyramid[k] = (unsigned char *)malloc(ch * cw * sizeof(unsigned char) * 3);
-        for (int y = 0; y < ch; y++)
-        {
-            for (int x = 0; x < cw; x++)
-            {
-                float tmp[3] = {0, 0, 0};
-                int start_y = (y << 1) - hkh;
-                int start_x = (x << 1) - hkw;
-                for (int p = 0; p < kh; p++)
-                {
-                    for (int q = 0; q < kw; q++)
-                    {
-                        int cx = start_x + q;
-                        int cy = start_y + p;
-                        if (cx >= 0 && cx < pw && cy >= 0 && cy < ph)
-                        {
-                            int mask_pos = p * kw + q;
-                            int img_pos = (cy * pw + cx) * 3;
-                            tmp[0] += gaus_kernel[mask_pos] * pyramid[k - 1][img_pos];
-                            tmp[1] += gaus_kernel[mask_pos] * pyramid[k - 1][img_pos + 1];
-                            tmp[2] += gaus_kernel[mask_pos] * pyramid[k - 1][img_pos + 2];
-                        }
-                    }
-                }
-                pyramid[k][(y * cw + x) * 3] = (unsigned char)tmp[0];
-                pyramid[k][(y * cw + x) * 3 + 1] = (unsigned char)tmp[1];
-                pyramid[k][(y * cw + x) * 3 + 2] = (unsigned char)tmp[2];
-            }
-        }
-        ph = ch;
-        pw = cw;
+        int cw = w >> i;
+        int ch = h >> i;
+        gaussianPyramidCPUOneLevel(pyramid[i - 1], cw, ch, pyramid[i]);
     }
 }
 
@@ -1054,263 +954,6 @@ __global__ void sumReductionAndMultOverWindowCUDA_3CH_to_1CH(unsigned char *arr1
     dest[pos] = tmp;
 }
 
-//? Optimization Notes:
-/*
-Treba da se napravi tiling, tiling ke napravam okolu prozorot,
-vo shared_memory mora da se loadiraat site elementi vo toj blok, plus granichnite elementi
-*/
-// TODO: FINISH TILING, me mrzi sega da go debagiram
-__global__ void sumReductionAndMultOverWindowGPU1CH_Tiled(const unsigned char *arr1, const unsigned char *arr2, int w, int h, int ww, int wh, int *dest)
-{
-
-    // __shared__ unsigned char tile1[36 * 36];
-    // __shared__ unsigned char tile2[36 * 36];
-    extern __shared__ unsigned char tile1[];
-    extern __shared__ unsigned char tile2[];
-
-    int hwh = wh >> 1;
-    int hww = ww >> 1;
-
-    const int TILE_SIZE_X = blockDim.x + (hww << 1);
-    const int TILE_SIZE_Y = blockDim.y + (hwh << 1);
-    const int TILE_SIZE = TILE_SIZE_X * TILE_SIZE_Y;
-    // const int TILE_SIZE_X = 36;
-    // const int TILE_SIZE_Y = 36;
-    // const int TILE_SIZE = TILE_SIZE_X * TILE_SIZE_Y;
-
-    int global_x = threadIdx.x + blockIdx.x * blockDim.x;
-    int global_y = threadIdx.y + blockIdx.y * blockDim.y;
-    int global_pos = global_y * w + global_x;
-
-    int local_x = threadIdx.x + hww;
-    int local_y = threadIdx.y + hwh;
-    int local_pos = local_y * TILE_SIZE_X + local_x;
-
-    // Load all values
-
-    tile1[local_pos] = arr1[global_pos];
-    tile2[local_pos] = arr2[global_pos];
-
-    // Load excess
-    int tmp_global_x, tmp_global_y, tmp_local_x, tmp_local_y, tmp_global_pos, tmp_local_pos;
-    // Left excess
-    if (local_x == hww)
-    {
-        for (int i = 0; i < hww; i++)
-        {
-            tmp_global_x = global_x - i;
-            tmp_local_pos = local_pos - i;
-            if (tmp_global_x < 0)
-            {
-                tile1[tmp_local_pos] = tile2[tmp_local_pos] = 0;
-                //? Ne znam dali e ova potrebno ama better safe than sorry
-            }
-            else
-            {
-                tmp_global_pos = global_pos - i;
-                tile1[tmp_local_pos] = arr1[tmp_global_pos];
-                tile2[tmp_local_pos] = arr2[tmp_global_pos];
-            }
-        }
-    }
-    // Right excess
-    if (local_x == TILE_SIZE_X - hww)
-    {
-        for (int i = 0; i < hww; i++)
-        {
-            tmp_global_x = global_x + i;
-            tmp_local_pos = local_pos + i;
-            if (tmp_global_x >= w)
-            {
-                tile1[tmp_local_pos] = tile2[tmp_local_pos] = 0;
-                //? Ne znam dali e ova potrebno ama better safe than sorry
-            }
-            else
-            {
-                tmp_global_pos = global_pos + i;
-                tile1[tmp_local_pos] = arr1[tmp_global_pos];
-                tile2[tmp_local_pos] = arr2[tmp_global_pos];
-            }
-        }
-    }
-
-    // Top excess
-    if (local_y == hwh)
-    {
-        for (int i = 0; i < hwh; i++)
-        {
-            tmp_global_y = global_y - i;
-            tmp_local_y = local_y - i;
-            tmp_local_pos = tmp_local_y * TILE_SIZE_X + local_x;
-            if (tmp_global_y < 0)
-            {
-                tile1[tmp_local_pos] = tile2[tmp_local_pos] = 0;
-                //? Ne znam dali e ova potrebno ama better safe than sorry
-            }
-            else
-            {
-                tmp_global_pos = tmp_global_y * w + global_x;
-                tile1[tmp_local_pos] = arr1[tmp_global_pos];
-                tile2[tmp_local_pos] = arr2[tmp_global_pos];
-            }
-        }
-    }
-    // Bottom excess
-    if (local_y == TILE_SIZE_Y - hwh)
-    {
-        for (int i = 0; i < hwh; i++)
-        {
-            tmp_global_y = global_y + i;
-            tmp_local_y = local_y + i;
-
-            tmp_local_pos = tmp_local_y * TILE_SIZE_X + local_x;
-
-            if (tmp_global_y >= h)
-            {
-                tile1[tmp_local_pos] = tile2[tmp_local_pos] = 0;
-                //? Ne znam dali e ova potrebno ama better safe than sorry
-            }
-            else
-            {
-                tmp_global_pos = tmp_global_y * w + global_x;
-                tile1[tmp_local_pos] = arr1[tmp_global_pos];
-                tile2[tmp_local_pos] = arr2[tmp_global_pos];
-            }
-        }
-    }
-
-    // Corners
-    // TL
-    if (local_x == hwh && local_y == hwh)
-    {
-        tmp_local_x = local_x - hww;
-        tmp_local_y = local_y - hwh;
-        tmp_global_x = global_x - hww;
-        tmp_global_y = global_y - hwh;
-        for (int i = 0; i < hwh; i++)
-        {
-            for (int j = 0; j < hww; j++)
-            {
-                tmp_local_pos = (tmp_local_y + i) * TILE_SIZE_X + (tmp_local_x + j);
-                if (tmp_global_x < 0 || tmp_global_y < 0)
-                {
-                    tile1[tmp_local_pos] = tile2[tmp_local_pos] = 0;
-                }
-                else
-                {
-                    tmp_global_pos = (tmp_global_y + i) * TILE_SIZE_X + (tmp_global_x + j);
-                    tile1[tmp_local_pos] = arr1[tmp_global_pos];
-                    tile2[tmp_local_pos] = arr2[tmp_global_pos];
-                }
-            }
-        }
-    }
-    // TR
-    if (local_x == TILE_SIZE_X - hww && local_y == hwh)
-    {
-        tmp_local_x = local_x;
-        tmp_local_y = local_y - hwh;
-        tmp_global_x = global_x;
-        tmp_global_y = global_y - hwh;
-        for (int i = 0; i < hwh; i++)
-        {
-            for (int j = 0; j < hww; j++)
-            {
-                tmp_local_pos = (tmp_local_y + i) * TILE_SIZE_X + (tmp_local_x + j);
-                if (tmp_global_x < 0 || tmp_global_y < 0)
-                {
-                    tile1[tmp_local_pos] = tile2[tmp_local_pos] = 0;
-                }
-                else
-                {
-                    tmp_global_pos = (tmp_global_y + i) * TILE_SIZE_X + (tmp_global_x + j);
-                    tile1[tmp_local_pos] = arr1[tmp_global_pos];
-                    tile2[tmp_local_pos] = arr2[tmp_global_pos];
-                }
-            }
-        }
-    }
-    // BL
-    if (local_x == hww && local_y == TILE_SIZE_Y - hwh)
-    {
-        tmp_local_x = local_x - hwh;
-        tmp_local_y = local_y;
-        tmp_global_x = global_x;
-        tmp_global_y = global_y;
-        for (int i = 0; i < hwh; i++)
-        {
-            for (int j = 0; j < hww; j++)
-            {
-                tmp_local_pos = (tmp_local_y + i) * TILE_SIZE_X + (tmp_local_x + j);
-                if (tmp_global_x < 0 || tmp_global_y < 0)
-                {
-                    tile1[tmp_local_pos] = tile2[tmp_local_pos] = 0;
-                }
-                else
-                {
-                    tmp_global_pos = (tmp_global_y + i) * TILE_SIZE_X + (tmp_global_x + j);
-                    tile1[tmp_local_pos] = arr1[tmp_global_pos];
-                    tile2[tmp_local_pos] = arr2[tmp_global_pos];
-                }
-            }
-        }
-    }
-    // BR
-    if (local_x == TILE_SIZE_X - hww && local_y == TILE_SIZE_Y - hwh)
-    {
-        tmp_local_x = local_x;
-        tmp_local_y = local_y;
-        tmp_global_x = global_x;
-        tmp_global_y = global_y;
-        for (int i = 0; i < hwh; i++)
-        {
-            for (int j = 0; j < hww; j++)
-            {
-                tmp_local_pos = (tmp_local_y + i) * TILE_SIZE_X + (tmp_local_x + j);
-                if (tmp_global_x < 0 || tmp_global_y < 0)
-                {
-                    tile1[tmp_local_pos] = tile2[tmp_local_pos] = 0;
-                }
-                else
-                {
-                    tmp_global_pos = (tmp_global_y + i) * TILE_SIZE_X + (tmp_global_x + j);
-                    tile1[tmp_local_pos] = arr1[tmp_global_pos];
-                    tile2[tmp_local_pos] = arr2[tmp_global_pos];
-                }
-            }
-        }
-    }
-
-    // Loading finished
-
-    __syncthreads();
-
-    int start_local_x = local_x - hww;
-    int start_local_y = local_y - hwh;
-
-    int tmp = 0;
-    for (int i = 0; i < wh; i++)
-    {
-        tmp_local_y = start_local_y + i;
-        if (tmp_local_y < 0 || tmp_local_y >= TILE_SIZE_Y)
-        {
-            continue;
-        }
-        for (int j = 0; j < ww; j++)
-        {
-            tmp_local_x = start_local_x + j;
-            if (tmp_local_x < 0 || tmp_local_x >= TILE_SIZE_X)
-            {
-                continue;
-            }
-            tmp_local_pos = tmp_local_y * TILE_SIZE_X + tmp_local_x;
-            tmp += tile1[tmp_local_pos] * tile2[tmp_local_pos];
-        }
-    }
-
-    dest[global_pos] = tmp;
-}
-
 /// @brief CUDA kernel to multiply arr1[i] * arr2[i] for all i belonging to a window around each point of the matrices
 /// @param arr1 Matrix1
 /// @param arr2 Matrix2
@@ -1388,7 +1031,6 @@ void launchSumReductionAndMultOverWindowGPU1CH(const unsigned char *arr1_h, cons
     int GRID_SIZE_Y = (int)ceil((float)h / (float)NUM_OF_THREADS);
     dim3 gridSize(GRID_SIZE_X, GRID_SIZE_Y);
 
-    // sumReductionAndMultOverWindowGPU1CH_Tiled<<<blockSize, gridSize>>>(arr1_d, arr2_d, w, h, ww, wh, dest_d);
     sumReductionAndMultOverWindowGPU1CH<<<blockSize, gridSize>>>(arr1_d, arr2_d, w, h, ww, wh, dest_d);
 
     cudaMemcpy(dest_h, dest_d, w * h * sizeof(int), cudaMemcpyDeviceToHost);
@@ -1484,6 +1126,100 @@ void launchSumReductionAndMultOverWindowGPU1CH_Float(const float *arr1_h, const 
     cudaFree(arr2_d);
     cudaFree(dest_d);
 }
+//? Optimization Notes:
+__global__ void sumReductionAndMultOverWindowGPU1CH_Tiled(const unsigned char *arr1, const unsigned char *arr2, int w, int h, int ww, int wh, int *dest, int TILE_SIZE_X, int TILE_SIZE_Y)
+{
+
+    extern __shared__ unsigned char shmem[];
+    unsigned char* tile1 = shmem;
+    unsigned char* tile2 = shmem + w * h;
+
+    int hwh = wh >> 1;
+    int hww = ww >> 1;
+
+    int x_o = threadIdx.x + blockIdx.x * TILE_SIZE_X;
+    int y_o = threadIdx.y + blockIdx.y * TILE_SIZE_Y;
+    int pos_o = x_o + y_o * w;
+
+    int x_i = x_o - hww;
+    int y_i = y_o - hwh;
+    int tile_pos = threadIdx.x + threadIdx.y * blockDim.x;
+    if(x_i < 0 || x_i >= w || y_i < 0 || y_i >= h){
+        tile1[tile_pos] = tile2[tile_pos] = 0;
+    }else{
+        int pos_i = x_i + y_i * w;
+        tile1[tile_pos] = arr1[pos_i];
+        tile2[tile_pos] = arr2[pos_i];
+    }
+    // Loading finished
+
+    __syncthreads();
+
+    if(x_o >= w || y_o >= h){
+        return;
+    }
+    if(threadIdx.x >= TILE_SIZE_X || threadIdx.y >= TILE_SIZE_Y){
+        return; 
+    }
+
+    int tmp = 0;
+    int tmp_x, tmp_y, tmp_pos;
+    for (int i = 0; i < wh; i++)
+    {
+        tmp_y = threadIdx.y + i;
+        for (int j = 0; j < ww; j++)
+        {
+            tmp_x = threadIdx.x + j;
+            tmp_pos = tmp_x + tmp_y * blockDim.x; 
+            tmp += tile1[tmp_pos] * tile2[tmp_pos];
+        }
+    }
+
+    dest[pos_o] = tmp;
+}
+
+
+
+/// @brief Launches a CUDA kernel to multiply arr1[i] * arr2[i] for all i belonging to a window around each point of the matrices
+/// @param arr1_h Matrix1
+/// @param arr2_h Matrix2
+/// @param w Width
+/// @param h Height
+/// @param ww Window Width
+/// @param wh Window Height
+/// @param dest_h Destination Matrix
+void launchSumReductionAndMultOverWindowGPU1CH_Tiled(const unsigned char *arr1_h, const unsigned char *arr2_h, int w, int h, int ww, int wh, int *dest_h)
+{
+
+    unsigned char *arr1_d;
+    unsigned char *arr2_d;
+    int *dest_d;
+
+    cudaMalloc((void **)&arr1_d, w * h * sizeof(unsigned char));
+    cudaMalloc((void **)&arr2_d, w * h * sizeof(unsigned char));
+    cudaMalloc((void **)&dest_d, w * h * sizeof(int));
+
+    cudaMemcpy(arr1_d, arr1_h, w * h * sizeof(unsigned char), cudaMemcpyHostToDevice);
+    cudaMemcpy(arr2_d, arr2_h, w * h * sizeof(unsigned char), cudaMemcpyHostToDevice);
+
+    int NUM_OF_THREADS = 32;
+    int TILE_SIZE_X = NUM_OF_THREADS - ww + 1;
+    int TILE_SIZE_Y = NUM_OF_THREADS - wh + 1;
+    dim3 blockSize(NUM_OF_THREADS, NUM_OF_THREADS);
+    int GRID_SIZE_X = (int)ceil((float)w / (float)TILE_SIZE_X);
+    int GRID_SIZE_Y = (int)ceil((float)h / (float)TILE_SIZE_Y);
+    dim3 gridSize(GRID_SIZE_X, GRID_SIZE_Y);
+
+    sumReductionAndMultOverWindowGPU1CH_Tiled<<<blockSize, gridSize, w * h * sizeof(unsigned char) * 2>>>(arr1_d, arr2_d, w, h, ww, wh, dest_d, TILE_SIZE_X, TILE_SIZE_Y);
+
+    cudaMemcpy(dest_h, dest_d, w * h * sizeof(int), cudaMemcpyDeviceToHost);
+
+    cudaFree(arr1_d);
+    cudaFree(arr2_d);
+    cudaFree(dest_d);
+}
+
+
 
 /// @brief Multiplies arr1[i] * arr2[i] for all i belonging to a window around each point of the matrices
 /// @param arr1 Matrix1
