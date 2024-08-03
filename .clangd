@@ -1,0 +1,16 @@
+CompileFlags:
+  Add:
+    - --cuda-path=/opt/cuda
+    - --cuda-gpu-arch=sm_80
+    - -L/opt/cuda/lib64
+    - -I/opt/cuda/include
+    - -L/usr/share/opencv4
+    - -I/usr/include/opencv4
+  Remove:
+    - -forward-unknown-to-host-compiler
+    - -Xcudafe
+    # relocatable device code
+    - -rdc*
+    - --options-file
+    - --diag-suppress*
+    - --generate-code*
