@@ -12,5 +12,5 @@ CompileFlags:
     # relocatable device code
     - -rdc*
     - --options-file
-    - --diag-suppress*
+    - --diag_suppress*
     - --generate-code*

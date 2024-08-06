@@ -1,4 +1,7 @@
 #define _USE_MATH_DEFINES
+#include "kernels.hpp"
+#include "OptFlowCpu.hpp"
+#include "OptFlowUtils.hpp"
 
 #include <stdio.h>
 #include <cuda_runtime.h>
@@ -11,109 +14,8 @@
 #include <opencv2/highgui/highgui.hpp>
 #include "main.h"
 
+
 using namespace std;
-
-void cleanup_outliers(unsigned char* src, int w , int h)
-{
-    for (int i = 0; i < h; i++)
-    {
-        for (int j = 0; j < w; j++)
-        {
-            if (src[i * w + j] >= 240 || src[i * w + j] < 20)
-            {
-                src[i * w + j] = 0;
-            }else{
-                src[i * w + j] = 255;
-            }
-        }
-    }
-}
-// Various convolution kernels
-// Bi gi stavil ovie vo drug file, ama preku glava mi e so cmake, ke mora da izgubam nekolku saati za da go napravam toa
-const float conv_x_3x3[9] = {
-    -1, 0, 1,
-    -2, 0, 2,
-    -1, 0, 1};
-const float conv_x_3x3_t[9] = {
-    1.0 * 1.0 / 3.0, 0, -1.0 * 1.0 / 3.0,
-    2.0 * 1.0 / 3.0, 0, -2.0 * 1.0 / 3.0,
-    1.0 * 1.0 / 3.0, 0, -1.0 * 1.0 / 3.0};
-const float conv_y_3x3[9] = {
-    -1,
-    -2,
-    -1,
-    0,
-    0,
-    0,
-    1,
-    2,
-    1,
-};
- const float conv_t_3x3[9] = {
-     1, 2, 1,
-     2, 3, 2,
-     1, 2, 1
- };
- //normalizirana verzija
-const float conv_t_3x3_n[9] = {
-    0.0666, 0.1333, 0.0666,
-    0.1333, 0.2, 0.1333,
-    0.0666, 0.1333, 0.0666};
-const float conv_y_d_2x2[9] = {
-    1, 0, 0,
-    0, -1, 0,
-    0, 0, 0};
-const float conv_x_d_2x2[9] = {
-    0, 1, 0,
-    -1, 0, 0,
-    0, 0, 0};
-const float conv_x_2x2[9] = {
-    -1, 1, 0,
-    -1, 1, 0,
-    0, 0, 0};
-const float conv_y_2x2[9] = {
-    -1, -1, 0,
-    1, 1, 0,
-    0, 0, 0};
-const float conv_z_2x2[9] = {
-    1, 1, 0,
-    1, 1, 0,
-    0, 0, 0};
-const float conv_x_5x5[25] = {
-    -1, -2, 0, 1, 2,
-    -2, -3, 0, 2, 3,
-    -3, -5, 0, 3, 5,
-    -2, -3, 0, 3, 2,
-    -1, -2, 0, 2, 1};
-const float gaus_kernel_5x5[25] = {
-    0.00366, 0.01465, 0.02564, 0.01465, 0.00366,
-    0.01465, 0.05860, 0.09523, 0.05860, 0.01465,
-    0.02564, 0.09523, 0.15018, 0.09523, 0.02564,
-    0.01465, 0.05860, 0.09523, 0.05860, 0.01465,
-    0.00366, 0.01465, 0.02564, 0.01465, 0.00366};
-const float gaus_kernel_3x3[9] = {
-    0.0625, 0.125, 0.0625,
-    0.125, 0.25, 0.125,
-    0.0625, 0.125, 0.0625};
-
-/// @brief Creates a grayscale image based on the average rgb value
-/// @param src
-/// @param dest
-/// @param w
-/// @param h
-void grayScaleAvgCPU(const unsigned char *src, unsigned char *dest, int w, int h)
-{
-    int pos, tmp;
-    for (int i = 0; i < h; i++)
-    {
-        for (int j = 0; j < w; j++)
-        {
-            pos = i * w + j;
-            tmp = (src[pos * 3] + src[pos * 3 + 1] + src[pos * 3 + 2]) / 3;
-            dest[pos * 3] = dest[pos * 3 + 1] = dest[pos * 3 + 2] = tmp;
-        }
-    }
-}
 
 /// @brief CUDA kernel that creates a grayscale image using the average rgb values, each block is a line
 /// @details IMPORTANT: This kernel should be called with a 1D block, each block is one line of the image
@@ -190,54 +92,6 @@ void launchGrayscaleAvgCuda(const unsigned char *src_h, unsigned char *dest_h, i
     cudaFree(src_d);
 }
 
-/// @brief CPU implementation of a 2D convolution over 3 channels
-/// @param src Source Image
-/// @param mask Mask
-/// @param dest Destination Image
-/// @param w Image Width
-/// @param h Image Height
-/// @param mw Mask Width
-/// @param mh Mask Height
-void convolutionCPU2D_3CH(const unsigned char *src, const float *mask, unsigned char *dest, int w, int h, int mw, int mh)
-{
-
-    int hmh = mh >> 1;
-    int hmw = mw >> 1;
-
-    int pos;
-    for (int y = 0; y < h; y++)
-    {
-        for (int x = 0; x < w; x++)
-        {
-            pos = y * w + x;
-
-            int tmp[3] = {0, 0, 0};
-            int start_x = x - hmw;
-            int start_y = y - hmh;
-            int tmp_pos, mask_pos, tmp_x, tmp_y;
-
-            for (int i = 0; i < mh; i++)
-            {
-                for (int j = 0; j < mw; j++)
-                {
-                    tmp_x = start_x + j;
-                    tmp_y = start_y + i;
-                    if (tmp_x >= 0 && tmp_x < w && tmp_y >= 0 && tmp_y < h)
-                    {
-                        tmp_pos = tmp_y * w + tmp_x;
-                        mask_pos = i * mw + j;
-                        tmp[0] += src[tmp_pos * 3] * mask[mask_pos];
-                        tmp[1] += src[tmp_pos * 3 + 1] * mask[mask_pos];
-                        tmp[2] += src[tmp_pos * 3 + 2] * mask[mask_pos];
-                    }
-                }
-            }
-            dest[pos * 3] = (unsigned char)tmp[0];
-            dest[pos * 3 + 1] = (unsigned char)tmp[1];
-            dest[pos * 3 + 2] = (unsigned char)tmp[2];
-        }
-    }
-}
 
 /// @brief CUDA kernel for 2D convolution
 /// @param src Source Matrix
@@ -575,64 +429,8 @@ void launchCudaConvolution1D(const cv::Mat src, cv::Mat dest)
     cudaFree(mask_d);
 }
 
-void gaussianPyramidCPUOneLevel(unsigned char* src, int w, int h, unsigned char * dest){
-    int kw = 3;
-    int kh = 3;
-    int hkh = kh >> 1;
-    int hkw = kw >> 1;
-    const float * gaus_kernel = gaus_kernel_3x3;
-    
-    int pw = w << 1;
-    int ph = h << 1;
-    for (int y = 0; y < h; y++)
-    {
-        for (int x = 0; x < w; x++)
-        {
-            float tmp[3] = {0, 0, 0};
-            int start_y = (y << 1) - hkh;
-            int start_x = (x << 1) - hkw;
-            for (int p = 0; p < kh; p++)
-            {
-                for (int q = 0; q < kw; q++)
-                {
-                    int cx = start_x + q;
-                    int cy = start_y + p;
-                    if (cx >= 0 && cx < pw && cy >= 0 && cy < ph)
-                    {
-                        int mask_pos = p * kw + q;
-                        int img_pos = (cy * pw + cx) * 3;
-                        tmp[0] += gaus_kernel[mask_pos] * src[img_pos];
-                        tmp[1] += gaus_kernel[mask_pos] * src[img_pos + 1];
-                        tmp[2] += gaus_kernel[mask_pos] * src[img_pos + 2];
-                    }
-                }
-            }
-            dest[(y * w + x) * 3] = (unsigned char)tmp[0];
-            dest[(y * w + x) * 3 + 1] = (unsigned char)tmp[1];
-            dest[(y * w + x) * 3 + 2] = (unsigned char)tmp[2];
-        }
-    }
-}
 
-/// @brief Sequential Implementation of a Gaussian Pyramid, need to free each level and then whole pyramid in order to prevent memory leaks
-/// @param src
-/// @param levels
-/// @return
-void gaussianPyramidCPU(unsigned char *src, int w, int h, int levels, unsigned char **dest)
-{
-    unsigned char **pyramid = dest;
-
-    memcpy(pyramid[0], src, w * h * 3 * sizeof(unsigned char));
-
-    for (int i = 1; i < levels; i++)
-    {
-        int cw = w >> i;
-        int ch = h >> i;
-        gaussianPyramidCPUOneLevel(pyramid[i - 1], cw, ch, pyramid[i]);
-    }
-}
-
-__constant__ float gaus_kernel_3x3_d[9] = {
+__constant__ float GAUS_KERNEL_3x3_d[9] = {
     0.0625, 0.125, 0.0625,
     0.125, 0.25, 0.125,
     0.0625, 0.125, 0.0625};
@@ -662,9 +460,9 @@ __global__ void gaussianPyramidGPUKernel(const unsigned char *src, int w, int h,
             {
                 int mask_pos = p * 3 + q;
                 int img_pos = (cy * w * 2 + cx) * 3;
-                tmp[0] += gaus_kernel_3x3_d[mask_pos] * src[img_pos];
-                tmp[1] += gaus_kernel_3x3_d[mask_pos] * src[img_pos + 1];
-                tmp[2] += gaus_kernel_3x3_d[mask_pos] * src[img_pos + 2];
+                tmp[0] += GAUS_KERNEL_3x3_d[mask_pos] * src[img_pos];
+                tmp[1] += GAUS_KERNEL_3x3_d[mask_pos] * src[img_pos + 1];
+                tmp[2] += GAUS_KERNEL_3x3_d[mask_pos] * src[img_pos + 2];
             }
         }
     }
@@ -674,7 +472,8 @@ __global__ void gaussianPyramidGPUKernel(const unsigned char *src, int w, int h,
     dest[pos * 3 + 2] = (unsigned char)tmp[2];
 }
 
-void launchGaussianPyramidGPUKernel(const unsigned char *src_h, int w, int h, unsigned char *dest_h)
+//TODO: Refactor properly
+void launchGaussianPyramidGPUKernel(const unsigned char *src_h, int w, int h, unsigned char *dest_h, const float* mask, int mw, int mh)
 {
     unsigned char *src_d;
     unsigned char *dest_d;
@@ -701,17 +500,14 @@ void launchGaussianPyramidGPUKernel(const unsigned char *src_h, int w, int h, un
 }
 
 //? Mozhebi ke dodadam proverka za dali e dovolno golema slikata vo nivoto za da se koristi GPU ili CPU?
-void gaussianPyramidGPU(const unsigned char *src, int w, int h, int levels, unsigned char **dest)
+void gaussianPyramidGPU(unsigned char ** pyramid, int w, int h, int levels, const float* mask, int mw, int mh)
 {
-
-    unsigned char **pyramid = dest;
-    memcpy(pyramid[0], src, w * h * 3 * sizeof(unsigned char));
 
     for (int k = 1; k < levels; k++)
     {
         w = w >> 1;
         h = h >> 1;
-        launchGaussianPyramidGPUKernel(pyramid[k - 1], w, h, pyramid[k]);
+        launchGaussianPyramidGPUKernel(pyramid[k - 1], w, h, pyramid[k], mask, mw, mh);
     }
 }
 
@@ -722,55 +518,9 @@ void sequentialSumReduction(int *array, int size)
     for (int i = 0; i < size; i++)
     {
         result += array[i];
-    }
+    };
 }
 
-/// @brief Sequential implementation of sum(arr1*arr2) over a window, arr1 and arr2 have the same dimensions. This implementation is not used because it is 3CH
-/// @param arr1 Matrix A
-/// @param arr2 Matric B
-/// @param w Width
-/// @param h Height
-/// @param ww window width
-/// @param wh window height
-/// @param dest Destination Array, must be of size w * h * 3 * sizeof(int)
-/// @return
-void sumReductionAndMultOverWindow_3CH(unsigned char *arr1, unsigned char *arr2, int w, int h, int ww, int wh, int *dest)
-{
-
-    int hkh = wh >> 1;
-    int hkw = ww >> 1;
-
-    for (int i = 0; i < h; i++)
-    {
-        for (int j = 0; j < w; j++)
-        {
-            int tmp[3] = {0, 0, 0};
-            int start_x = j - hkw;
-            int start_y = i - hkh;
-
-            for (int y = 0; y < wh; y++)
-            {
-                for (int x = 0; x < ww; x++)
-                {
-                    int cx = start_x + x;
-                    int cy = start_y + y;
-                    if (cx < 0 || cy < 0 || cx > w || cy > h)
-                    {
-                        continue;
-                    }
-                    int pos = cy * w + cx;
-                    tmp[0] += arr1[pos * 3] * arr2[pos * 3];
-                    tmp[1] += arr1[pos * 3 + 1] * arr2[pos * 3 + 1];
-                    tmp[2] += arr1[pos * 3 + 2] * arr2[pos * 3 + 2];
-                }
-            }
-            int pos = i * w + j;
-            dest[pos * 3] = tmp[0];
-            dest[pos * 3 + 1] = tmp[1];
-            dest[pos * 3 + 2] = tmp[2];
-        }
-    }
-}
 
 __global__ void sumReductionAndMultOverWindowCUDA_3CH_to_1CH_Tiled(unsigned char *arr1, unsigned char *arr2, int *dest, int w, int h, int ww, int wh)
 {
@@ -1219,56 +969,6 @@ void launchSumReductionAndMultOverWindowGPU1CH_Tiled(const unsigned char *arr1_h
     cudaFree(dest_d);
 }
 
-
-
-/// @brief Multiplies arr1[i] * arr2[i] for all i belonging to a window around each point of the matrices
-/// @param arr1 Matrix1
-/// @param arr2 Matrix2
-/// @param w Width
-/// @param h Height
-/// @param ww Window Width
-/// @param wh Window Height
-/// @param dest Destination Matrix
-void sumReductionAndMultOverWindowCPU1CH(const unsigned char *arr1, const unsigned char *arr2, int w, int h, int ww, int wh, int *dest)
-{
-
-    int hww = ww >> 1;
-    int hwh = wh >> 1;
-
-    int tmp_pos, tmp_x, tmp_y, pos, start_x, start_y;
-    int tmp = 0;
-
-    for (int i = 0; i < h; i++)
-    {
-        for (int j = 0; j < w; j++)
-        {
-            pos = i * w + j;
-            start_x = j - hww;
-            start_y = i - hwh;
-            tmp = 0;
-            for (int p = 0; p < wh; p++)
-            {
-                tmp_y = start_y + p;
-                if (tmp_y < 0 || tmp_y >= h)
-                {
-                    continue;
-                }
-                for (int q = 0; q < ww; q++)
-                {
-                    tmp_x = start_x + q;
-                    if (tmp_x < 0 || tmp_x >= w)
-                    {
-                        continue;
-                    }
-                    tmp_pos = tmp_y * w + tmp_x;
-                    tmp += arr1[tmp_pos] * arr2[tmp_pos];
-                }
-            }
-            dest[pos] = tmp;
-        }
-    }
-}
-
 //? Realno ova ne znam kolku e korisno deka bi trebalo cuda malloc povekje vreme da potroshi nego da se napravi so CPU
 __global__ void arraySubtractionCuda(unsigned char *arr1, unsigned char *arr2, unsigned char *dest, int n)
 {
@@ -1282,14 +982,6 @@ napravat site cuda api povici ke go napravi posporo nego da e na procesor.
 Go imam primeteno toa koga sum napravil vakov cuda kernel pred toa.
 */
 
-void sequentialArraySubtraction(unsigned char *arr1, unsigned char *arr2, int n, unsigned char *dest)
-{
-    for (int i = 0; i < n; i++)
-    {
-        dest[i] = arr1[i] - arr2[i];
-    }
-}
-
 void sequentialArraySubtraction_Float(float *arr1, float *arr2, int n, float *dest)
 {
     for (int i = 0; i < n; i++)
@@ -1302,11 +994,12 @@ void sequentialArraySubtraction_Float(float *arr1, float *arr2, int n, float *de
     }
 }
 
+// TODO: OVOJ KOD IMA PROBLEMI, NE TREBA DA SE KORISTI
 // Ova e za kolku treba da se napravi padding na SHMEM za da se loadiraat vrednostite potrebni za konvolucija so maska od golemina
 // padding*2 + 1
-#define SHMEM_PADDING 2;
-#define PRESUMED_NUM_OF_THREADS 32;
-#define TILE_SIZE 36;
+#define SHMEM_PADDING 2
+#define PRESUMED_NUM_OF_THREADS 32
+// #define TILE_SIZE 36;
 // naive implementation
 /// @brief This is a CUDA kernel for a tiled implementation of a 2D convolution where the mask is in constant memory
 /// @details IMPORTANT: This function is hardcoded to be run with a block size of 32x32, it may not work with other blockSizes
@@ -1397,7 +1090,7 @@ __global__ void convolutionGPU2D_3CH_to_1CH_Tiled(unsigned char *src, int w, int
             tmp_global_y = global_y - i;
             tmp_local_y = local_y - i;
 
-            tmp_local_pos = tmp_local_y * TILE_SIZE + local_x;
+            tmp_local_pos = tmp_local_y * 36 + local_x;
 
             if (tmp_global_y < 0)
             {
@@ -1419,7 +1112,7 @@ __global__ void convolutionGPU2D_3CH_to_1CH_Tiled(unsigned char *src, int w, int
             tmp_global_y = global_y + i;
             tmp_local_y = local_y + i;
 
-            tmp_local_pos = tmp_local_y * TILE_SIZE + local_x;
+            tmp_local_pos = tmp_local_y * 36 + local_x;
 
             if (tmp_global_y >= h)
             {
@@ -1661,6 +1354,7 @@ void launchCudaConvolution2D_3CH_to_1CH_Tiled(const unsigned char *src_h, int w,
     cudaFree(dest_d);
 }
 
+//TODO: OVOJ KOD IMA PROBLEM, NE SMEE DA SE KORISTI
 /// @brief This is a CUDA kernel for a tiled implementation of a 2D convolution where the mask is in constant memory
 /// @details IMPORTANT: This function is hardcoded to be run with a block size of 32x32, it may not work with other blockSizes
 /// @param src_h Source Image, size = w * h * 3
@@ -1749,7 +1443,7 @@ __global__ void convolutionGPU2D_3CH_to_1CH_Tiled_Float(unsigned char *src, int 
             tmp_global_y = global_y - i;
             tmp_local_y = local_y - i;
 
-            tmp_local_pos = tmp_local_y * TILE_SIZE + local_x;
+            tmp_local_pos = tmp_local_y * 36 + local_x;
 
             if (tmp_global_y < 0)
             {
@@ -1771,7 +1465,7 @@ __global__ void convolutionGPU2D_3CH_to_1CH_Tiled_Float(unsigned char *src, int 
             tmp_global_y = global_y + i;
             tmp_local_y = local_y + i;
 
-            tmp_local_pos = tmp_local_y * TILE_SIZE + local_x;
+            tmp_local_pos = tmp_local_y * 36 + local_x;
 
             if (tmp_global_y >= h)
             {
@@ -2051,49 +1745,6 @@ void launchCudaConvolution2D_3CH_to_1CH(const unsigned char *src_h, int w, int h
     cudaFree(dest_d);
 }
 
-/// @brief CPU Implementation of a 2D convolution that reduces the channels from 3 to 1. This function assumes an input where all 3 channels are the same (grayscale)
-/// @param src Source Image
-/// @param w Image Width
-/// @param h Image Height
-/// @param dest Destination
-/// @param mask Mask
-/// @param mw Mask Width
-/// @param mh Maask Height
-void convolutionCPU2D_3CH_to_1CH(const unsigned char *src, int w, int h, unsigned char *dest, const float *mask, int mw, int mh)
-{
-    int hmh = mh >> 1;
-    int hmw = mw >> 1;
-
-    int pos, tmp;
-    for (int y = 0; y < h; y++)
-    {
-        for (int x = 0; x < w; x++)
-        {
-            pos = y * w + x;
-
-            tmp = 0;
-            int start_x = x - hmw;
-            int start_y = y - hmh;
-            int tmp_pos, mask_pos, tmp_x, tmp_y;
-
-            for (int i = 0; i < mh; i++)
-            {
-                for (int j = 0; j < mw; j++)
-                {
-                    tmp_x = start_x + j;
-                    tmp_y = start_y + i;
-                    if (tmp_x >= 0 && tmp_x < w && tmp_y >= 0 && tmp_y < h)
-                    {
-                        tmp_pos = tmp_y * w + tmp_x;
-                        mask_pos = i * mw + j;
-                        tmp += src[tmp_pos * 3] * mask[mask_pos];
-                    }
-                }
-            }
-            dest[pos] = (unsigned char)tmp;
-        }
-    }
-}
 
 // Nema da go napravam ova da se paralelizira so CUDA deka ova ne e del od algoritamot, samo go koristam za debagiranje
 /// @brief Upscales an src image with width w and height h, n times. This was mainly used for debugging
@@ -2149,189 +1800,6 @@ void upscale1CH(unsigned char *src, int w, int h, int n, unsigned char *dest)
             }
         }
     }
-}
-
-//?Ne znam dali e isplatlivo da se paralelizira
-/// @brief Shifts the image back based on the optical flow so far
-/// @param src Source Image
-/// @param w Image Width
-/// @param h Image Height
-/// @param level Level of the Gaussian Pyramid
-/// @param maxLevel MaxLevel of the Gaussian Pyraamid
-/// @param optFlowPyramid Array containing the calculated optical flow at each level of the pyramid
-/// @param dest Destination Image
-void shiftBackImgCPU(const unsigned char *src, int w, int h, int level, int maxLevel, float **optFlowPyramid, unsigned char *dest)
-{
-    int pos, tmp_pos;
-    //? Ne sum siguren za ova
-    memcpy(dest, src, w * h * sizeof(unsigned char));
-    for (int i = 0; i < h; i++)
-    {
-        for (int j = 0; j < w; j++)
-        {
-            // For every point of prev
-            pos = i * w + j;
-            // Find cumulative flow of all previous levels
-            float u, v;
-            u = v = 0;
-            for (int k = maxLevel - 1; k > level; k--)
-            {
-                int offset = k - level;
-                int tmp_i = i * (1 >> offset);
-                int tmp_j = j * (1 >> offset);
-                int tmp_pos = tmp_i * (w >> offset) + tmp_j;
-                int multiplier = 1 << offset;
-                u += (float) multiplier * optFlowPyramid[k][tmp_pos * 2];
-                v += (float) multiplier * optFlowPyramid[k][tmp_pos * 2 + 1];
-            }
-            // calculate new_pos
-            int new_pos_x = j + u;
-            int new_pos_y = i + v;
-            if (new_pos_x >= w || new_pos_x < 0 || new_pos_y >= h || new_pos_y < 0)
-            {
-                continue;
-            }
-
-            int new_pos = new_pos_y * w + new_pos_x;
-            // Now put new_pos into pos of dest
-            dest[pos * 3] = src[new_pos * 3];
-            dest[pos * 3 + 1] = src[new_pos * 3 + 1];
-            dest[pos * 3 + 2] = src[new_pos * 3 + 2];
-        }
-    }
-}
-
-/// @brief Solves the inverse matrix in the optical flow equation and calculates the opticalFlow
-/// @param sumIx2
-/// @param sumIy2
-/// @param sumIxIy
-/// @param sumIxIt
-/// @param sumIyIt
-/// @param optFlowPyramid Optical Flow Pyramid
-/// @param level Current Level of the pyramid
-/// @param w Current Width
-/// @param h Current Height
-void inverseMatrixCPU(int *sumIx2, int *sumIy2, int *sumIxIy, int *sumIxIt, int *sumIyIt, float **optFlowPyramid, int level, int w, int h)
-{
-    for (int i = 0; i < h; i++)
-    {
-        for (int j = 0; j < w; j++)
-        {
-            // Calculate inverse matrix (AAT)^-1
-            int pos = i * w + j;
-            float a, b, c, d;
-            a = (float)sumIx2[pos];
-            b = c = (float)sumIxIy[pos];
-            d = (float)sumIy2[pos];
-            float prefix = 1 / (a * d - b * c);
-            a *= prefix;
-            b *= prefix;
-            c *= prefix;
-            d *= prefix;
-
-            float u = -d * sumIxIt[pos] + b * sumIyIt[pos];
-            float v = c * sumIxIt[pos] - a * sumIyIt[pos];
-            optFlowPyramid[level][pos * 2] = u;
-            optFlowPyramid[level][pos * 2 + 1] = v;
-        }
-    }
-}
-
-/// @brief A function that calculates optical flow for a single level of the Gaussian Pyramid using GPU functions
-/// @param prev Previous Image
-/// @param next Next Image
-/// @param w Image Width at this level
-/// @param h Image Height at this level
-/// @param optFlowPyramid An array containing the optical flow field at every level of the pyramid
-/// @param level Level of the Gaussian pyramid
-/// @param maxLevel MaxLevel of the Gaussian pyramid
-void calculateOpticalFlowCPU(const unsigned char *prev, unsigned char *next, int w, int h, float **optFlowPyramid, int level, int maxLevel)
-{
-    // optFlowPyramid is the pyramid of all optical flows
-    // optFlowPyramid[i] is the optical flow field, described by a vector (u, v) at each point
-
-    // STEP 0
-    // SHIFT NEXT IMAGE BACK BY PREVIOUSLY CALCULATED OPTICAL FLOW
-    // Ova se pravi za celiot dosega presmetan optical flow
-    unsigned char *shifted = (unsigned char *)malloc(w * h * 3 * sizeof(unsigned char));
-    if (level != maxLevel - 1)
-    {
-        shiftBackImgCPU(next, w, h, level, maxLevel, optFlowPyramid, shifted);
-        next = shifted;
-    }
-
-    // STEP 1
-    // calculate partial derivatives at all points using kernels for finite differences (Ix, Iy, It)
-    unsigned char *Ix = (unsigned char *)malloc(w * h * sizeof(unsigned char));
-    convolutionCPU2D_3CH_to_1CH(prev, w, h, Ix, conv_x_3x3, 3, 3);
-
-    unsigned char *Iy = (unsigned char *)malloc(w * h * sizeof(unsigned char));
-    convolutionCPU2D_3CH_to_1CH(prev, w, h, Iy, conv_y_3x3, 3, 3);
-
-    unsigned char *It1 = (unsigned char *)malloc(w * h * sizeof(unsigned char));
-    convolutionCPU2D_3CH_to_1CH(prev, w, h, It1, gaus_kernel_3x3, 3, 3);
-    unsigned char *It2 = (unsigned char *)malloc(w * h * sizeof(unsigned char));
-    convolutionCPU2D_3CH_to_1CH(next, w, h, It2, gaus_kernel_3x3, 3, 3);
-    unsigned char *It = It1; // ova za da bide podobro optimizirano
-    sequentialArraySubtraction(It2, It1, w * h, It);
-
-    // STEP 2
-    // Calculate sumIx2, sumIy2, sumIxIy, sumIxIt, sumIyIt
-    int ww = 9;
-    int wh = 9;
-    int *sumIx2 = (int *)malloc(w * h * sizeof(int));
-    sumReductionAndMultOverWindowCPU1CH(Ix, Ix, w, h, ww, wh, sumIx2);
-
-    int *sumIy2 = (int *)malloc(w * h * sizeof(int));
-    sumReductionAndMultOverWindowCPU1CH(Iy, Iy, w, h, ww, wh, sumIy2);
-
-    int *sumIxIy = (int *)malloc(w * h * sizeof(int));
-    sumReductionAndMultOverWindowCPU1CH(Ix, Iy, w, h, ww, wh, sumIxIy);
-
-    int *sumIxIt = (int *)malloc(w * h * sizeof(int));
-    sumReductionAndMultOverWindowCPU1CH(Ix, It, w, h, ww, wh, sumIxIt);
-    int *sumIyIt = (int *)malloc(w * h * sizeof(int));
-    sumReductionAndMultOverWindowCPU1CH(Iy, It, w, h, ww, wh, sumIyIt);
-
-    // STEP 3
-    // Calculate the optical flow vector at every point (i, j)
-    //  inverseMatrixCPU(sumIx2, sumIy2, sumIxIy, sumIxIt, sumIyIt, optFlowPyramid, level, w, h);
-    for (int i = 0; i < h; i++)
-    {
-        for (int j = 0; j < w; j++)
-        {
-            // Calculate inverse matrix (AAT)^-1
-            int pos = i * w + j;
-            double a, b, c, d;
-            a = (double)sumIx2[pos];
-            b = c = (double)sumIxIy[pos];
-            d = (double)sumIy2[pos];
-            double prefix = 1 / (a * d - b * c);
-            a *= prefix;
-            b *= prefix;
-            d *= prefix;
-
-            float u = -d * sumIxIt[pos] + b * sumIyIt[pos];
-            float v = c * sumIxIt[pos] - a * sumIyIt[pos];
-
-            optFlowPyramid[level][pos * 2] = u;
-            optFlowPyramid[level][pos * 2 + 1] = v;
-        }
-    }
-
-    // Free all malloc memory
-    free(Ix);
-    free(Iy);
-    free(It1);
-    free(It2);
-
-    free(sumIx2);
-    free(sumIy2);
-    free(sumIxIy);
-    free(sumIxIt);
-    free(sumIyIt);
-
-    free(shifted);
 }
 
 /// @brief CUDA kernel for solving the inverse matrix and calculating optical flow
@@ -2518,88 +1986,6 @@ void launchInverseMatrixGPU_Float(float *sumIx2, float *sumIy2, float *sumIxIy, 
     cudaFree(optFlow_d);
 }
 
-
-//!Ne e tochna funckijava
-/// @brief A function that calculates optical flow for a single level of the Gaussian Pyramid using GPU functions
-/// @param prev Previous Image
-/// @param next Next Image
-/// @param w Image Width at this level
-/// @param h Image Height at this level
-/// @param optFlowPyramid An array containing the optical flow field at every level of the pyramid
-/// @param level Level of the Gaussian pyramid
-/// @param maxLevel MaxLevel of the Gaussian pyramid
-void calculateOpticalFlowGPU_WRONG(const unsigned char *prev, unsigned char *next, int w, int h, float **optFlowPyramid, int level, int maxLevel)
-{
-    // optFlowPyramid is the pyramid of all optical flows
-    // optFlowPyramid[i] is the optical flow field, described by a vector (u, v) at each point
-
-    // STEP 0
-    // SHIFT NEXT IMAGE BACK BY PREVIOUSLY CALCULATED OPTICAL FLOW
-    // Ova se pravi za celiot dosega presmetan optical flow
-    unsigned char *shifted = (unsigned char *)malloc(w * h * 3 * sizeof(unsigned char));
-    if (level != maxLevel - 1)
-    {
-        shiftBackImgCPU(next, w, h, level, maxLevel, optFlowPyramid, shifted);
-        next = shifted;
-    }
-
-    // STEP 1
-    // calculate partial derivatives at all points using kernels for finite differences (Ix, Iy, It)
-
-    unsigned char *Ix = (unsigned char *)malloc(w * h * sizeof(unsigned char));
-    launchCudaConvolution2D_3CH_to_1CH_Tiled(prev, w, h, Ix, conv_x_3x3, 3, 3);
-    cleanup_outliers(Ix, w, h);
-
-    unsigned char *Iy = (unsigned char *)malloc(w * h * sizeof(unsigned char));
-    launchCudaConvolution2D_3CH_to_1CH_Tiled(prev, w, h, Iy, conv_y_3x3, 3, 3);
-    cleanup_outliers(Iy, w, h);
-
-    unsigned char *It1 = (unsigned char *)malloc(w * h * sizeof(unsigned char));
-    launchCudaConvolution2D_3CH_to_1CH_Tiled(prev, w, h, It1, conv_t_3x3, 3, 3);
-    unsigned char *It2 = (unsigned char *)malloc(w * h * sizeof(unsigned char));
-    launchCudaConvolution2D_3CH_to_1CH_Tiled(next, w, h, It2, conv_t_3x3, 3, 3);
-    unsigned char *It = It1; // ova za da bide podobro optimizirano
-    sequentialArraySubtraction(It2, It1, w * h, It);
-    cleanup_outliers(It, w, h);
-
-    // STEP 2
-    // Calculate sumIx2, sumIy2, sumIxIy, sumIxIt, sumIyIt
-    int ww = 9;
-    int wh = 9;
-    int *sumIx2 = (int *)malloc(w * h * sizeof(int));
-    launchSumReductionAndMultOverWindowGPU1CH(Ix, Ix, w, h, ww, wh, sumIx2);
-
-    int *sumIy2 = (int *)malloc(w * h * sizeof(int));
-    launchSumReductionAndMultOverWindowGPU1CH(Iy, Iy, w, h, ww, wh, sumIy2);
-
-    int *sumIxIy = (int *)malloc(w * h * sizeof(int));
-    launchSumReductionAndMultOverWindowGPU1CH(Ix, Iy, w, h, ww, wh, sumIxIy);
-
-    int *sumIxIt = (int *)malloc(w * h * sizeof(int));
-    launchSumReductionAndMultOverWindowGPU1CH(Ix, It, w, h, ww, wh, sumIxIt);
-
-    int *sumIyIt = (int *)malloc(w * h * sizeof(int));
-    launchSumReductionAndMultOverWindowGPU1CH(Iy, It, w, h, ww, wh, sumIyIt);
-
-    // STEP 3
-    // Calculate the optical flow vector at every point (i, j)
-    launchInverseMatrixGPU(sumIx2, sumIy2, sumIxIy, sumIxIt, sumIyIt, optFlowPyramid, level, w, h);
-
-    // Free all malloc memory
-    free(Ix);
-    free(Iy);
-    free(It1);
-    free(It2);
-
-    free(sumIx2);
-    free(sumIy2);
-    free(sumIxIy);
-    free(sumIxIt);
-    free(sumIyIt);
-
-    free(shifted);
-}
-
 /// @brief A function that calculates optical flow for a single level of the Gaussian Pyramid using GPU functions
 /// @param prev Previous Image
 /// @param next Next Image
@@ -2619,7 +2005,7 @@ void calculateOpticalFlowGPU(const unsigned char *prev, unsigned char *next, int
     unsigned char *shifted = (unsigned char *)malloc(w * h * 3 * sizeof(unsigned char));
     if (level != maxLevel - 1)
     {
-        shiftBackImgCPU(next, w, h, level, maxLevel, optFlowPyramid, shifted);
+        cpu::shift_back_pyramid(next, w, h, level, maxLevel, optFlowPyramid, shifted);
         next = shifted;
     }
 
@@ -2629,15 +2015,15 @@ void calculateOpticalFlowGPU(const unsigned char *prev, unsigned char *next, int
     // calculate partial derivatives at all points using kernels for finite differences (Ix, Iy, It)
 
     float *Ix = (float *)malloc(w * h * sizeof(float));
-    launchCudaConvolution2D_3CH_to_1CH_Tiled_Float(prev, w, h, Ix, conv_x_3x3, 3, 3);
+    launchCudaConvolution2D_3CH_to_1CH_Tiled_Float(prev, w, h, Ix, Dx_3x3, 3, 3);
 
     float *Iy = (float *)malloc(w * h * sizeof(float));
-    launchCudaConvolution2D_3CH_to_1CH_Tiled_Float(prev, w, h, Iy, conv_y_3x3, 3, 3);
+    launchCudaConvolution2D_3CH_to_1CH_Tiled_Float(prev, w, h, Iy, Dy_3x3, 3, 3);
 
     float *It1 = (float *)malloc(w * h * sizeof(float));
-    launchCudaConvolution2D_3CH_to_1CH_Tiled_Float(prev, w, h, It1, conv_t_3x3, 3, 3);
+    launchCudaConvolution2D_3CH_to_1CH_Tiled_Float(prev, w, h, It1, Dt_3x3, 3, 3);
     float *It2 = (float *)malloc(w * h * sizeof(float));
-    launchCudaConvolution2D_3CH_to_1CH_Tiled_Float(next, w, h, It2, conv_t_3x3, 3, 3);
+    launchCudaConvolution2D_3CH_to_1CH_Tiled_Float(next, w, h, It2, Dt_3x3, 3, 3);
     float *It = It1; // ova za da bide podobro optimizirano
     sequentialArraySubtraction_Float(It2, It1, w * h, It);
 
@@ -2694,7 +2080,6 @@ void generate_gaussian_kernel(double sigmaS, int kernel_size, double *dest)
     if (kernel_size % 2 == 0)
     {
         kernel_size += 1;
-        dest = (double *)malloc(kernel_size * kernel_size * sizeof(double));
     }
     double *gaus_mask = dest;
     int hk = kernel_size >> 1;
@@ -2930,6 +2315,7 @@ int main()
     cv::Mat gray(src.rows, src.cols, CV_8UC3);
     
     launchGrayscaleAvgCuda(src.data, gray.data, src.rows, src.cols);
+		//cpu::grayscale_avg_cpu(src.data, gray.data, src.rows, src.cols);
 
     unsigned char **prevPyramid = (unsigned char **)malloc(levels * sizeof(unsigned char *));
     int w = src.cols;
@@ -2940,14 +2326,17 @@ int main()
         w = w >> 1;
         h = h >> 1;
     }
-    gaussianPyramidGPU(gray.data, gray.cols, gray.rows, levels, prevPyramid);
+		memcpy(prevPyramid[0], gray.data, gray.cols * gray.rows * sizeof(unsigned char) * 3);
+    gaussianPyramidGPU(prevPyramid, gray.cols, gray.rows, levels, GAUS_KERNEL_3x3, 3, 3);
 
     // camera.set(cv::CAP_PROP_FPS, 60);
     bool test = true;
     bool test_x = true;
     bool test_y = true;
     bool test_t = true;
-    int testing_levels = 1;
+    int testing_levels = 3;
+
+		bool prevPyramidAlloc = true;
     while (true)
     {
 
@@ -2973,15 +2362,18 @@ int main()
         w = src.cols;
         h = src.rows;
         unsigned char **pyramid = (unsigned char **)malloc(levels * sizeof(unsigned char *));
-        for (int k = 0; k < levels; k++)
+				pyramid[0] = filtered.data;
+				//pyramid[0] = gray.data;
+        for (int k = 1; k < levels; k++)
         {
             pyramid[k] = (unsigned char *)malloc(w * h * 3 * sizeof(unsigned char));
             w = w >> 1;
             h = h >> 1;
         }
-        // gaussianPyram2dCPU(gray.data, gray.cols, gray.rows, levels, pyramid);
-        // gaussianPyramidGPU(gray.data, gray.cols, gray.rows, levels, pyramid);
-        gaussianPyramidGPU(filtered.data, gray.cols, gray.rows, levels, pyramid);
+        // cpu::gauss_pyramid(gray.data, src.cols, src.rows, levels, pyramid);
+        // gaussianPyramidGPU(gray.data, src.cols, src.rows, levels, pyramid);
+        gaussianPyramidGPU(pyramid, src.cols, src.rows, levels, GAUS_KERNEL_3x3, 3, 3);
+        //cpu::gauss_pyramid(pyramid, src.cols, src.rows, levels, GAUS_KERNEL_3x3, 3, 3);
 
         // prikaz na nivoata na gauziskata piramida
         if (test)
@@ -3001,8 +2393,8 @@ int main()
                     title[7] = 'x';
                     title1[7] = ' ';
                     unsigned char *transformed_unscaled = (unsigned char *)malloc(w * h * sizeof(unsigned char));
-                    launchCudaConvolution2D_3CH_to_1CH_Tiled(pyramid[k], w, h, transformed_unscaled, conv_x_3x3, 3, 3);
-                    cleanup_outliers(transformed_unscaled, w, h);
+                    launchCudaConvolution2D_3CH_to_1CH_Tiled(pyramid[k], w, h, transformed_unscaled, Dx_3x3, 3, 3);
+                    utils::cleanup_outliers(transformed_unscaled, w, h);
                     upscale1CH(transformed_unscaled, w, h, k, transfomed_scaled.data);
                     title[6] = '0' + (char)k;
                     title1[6] = '0' + (char)k;
@@ -3016,11 +2408,11 @@ int main()
                     title1[7] = ' ';
                     unsigned char *transformed_unscaledt2 = (unsigned char *)malloc(w * h * sizeof(unsigned char));
                     unsigned char *transformed_unscaledt1 = (unsigned char *)malloc(w * h * sizeof(unsigned char));
-                    launchCudaConvolution2D_3CH_to_1CH_Tiled(pyramid[k], w, h, transformed_unscaledt2, conv_t_3x3_n, 3, 3);
-                    launchCudaConvolution2D_3CH_to_1CH_Tiled(prevPyramid[k], w, h, transformed_unscaledt1, conv_t_3x3_n, 3, 3);
-                    sequentialArraySubtraction(transformed_unscaledt2, transformed_unscaledt1, w *h, transformed_unscaledt1);
+                    launchCudaConvolution2D_3CH_to_1CH_Tiled(pyramid[k], w, h, transformed_unscaledt2, Dt_3x3_n, 3, 3);
+                    launchCudaConvolution2D_3CH_to_1CH_Tiled(prevPyramid[k], w, h, transformed_unscaledt1, Dt_3x3_n, 3, 3);
+                    cpu::sub_arr(transformed_unscaledt2, transformed_unscaledt1, w *h, transformed_unscaledt1);
 
-                    cleanup_outliers(transformed_unscaledt1, w, h);
+                    utils::cleanup_outliers(transformed_unscaledt1, w, h);
                     upscale1CH(transformed_unscaledt1, w, h, k, transfomed_scaled.data);
                     title[6] = '0' + (char)k;
                     title1[6] = '0' + (char)k;
@@ -3034,8 +2426,8 @@ int main()
                     title[7] = 'y';
                     title1[7] = ' ';
                     unsigned char *transformed_unscaled = (unsigned char *)malloc(w * h * sizeof(unsigned char));
-                    launchCudaConvolution2D_3CH_to_1CH_Tiled(pyramid[k], w, h, transformed_unscaled, conv_y_3x3, 3, 3);
-                    cleanup_outliers(transformed_unscaled, w, h);
+                    launchCudaConvolution2D_3CH_to_1CH_Tiled(pyramid[k], w, h, transformed_unscaled, Dy_3x3, 3, 3);
+                    utils::cleanup_outliers(transformed_unscaled, w, h);
                     upscale1CH(transformed_unscaled, w, h, k, transfomed_scaled.data);
                     title[6] = '0' + (char)k;
                     title1[6] = '0' + (char)k;
@@ -3054,6 +2446,7 @@ int main()
             int tmp_w = src.cols >> k;
             flowPyramid[k] = (float *)malloc(tmp_h * tmp_w * 2 * sizeof(float));
             calculateOpticalFlowGPU(prevPyramid[k], pyramid[k], tmp_w, tmp_h, flowPyramid, k, levels);
+            //cpu::calc_optical_flow(prevPyramid[k], pyramid[k], tmp_w, tmp_h, flowPyramid, k, levels);
         }
 
         // Visualize flow field
@@ -3068,7 +2461,7 @@ int main()
             for (int j = 0; j < w; j += offset)
             {
                 // For every point of prev
-                int pos = i * w + j;
+                //int pos = i * w + j;
                 // Find cumulative flow of all previous levels
                 float u, v;
                 u = v = 0;
@@ -3108,13 +2501,21 @@ int main()
         cv::imshow("Optical Flow Field", test);
 
         // Free malloc
-        for (int i = 0; i < levels; i++)
+				// index 0 is src
+				if(prevPyramidAlloc){
+					free(prevPyramid[0]);
+					prevPyramidAlloc = false;
+				}
+        for (int i = 1; i < levels; i++)
         {
             free(prevPyramid[i]);
-            free(flowPyramid[i]);
         }
         free(prevPyramid);
         prevPyramid = pyramid;
+        for (int i = 1; i < levels; i++)
+        {
+            free(flowPyramid[i]);
+        }
         free(flowPyramid);
 
         if (cv::waitKey(5) == 27)

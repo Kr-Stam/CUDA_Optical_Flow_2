@@ -15,7 +15,10 @@ if (UNIX)
 
 		message(STATUS "Importing opencv")
 		find_package( OpenCV REQUIRED )
-		include_directories(${OpenCV_INCLUDE_DIRS})
+		include_directories(
+			"${CMAKE_SOURCE_DIR}"
+			"${OpenCV_INCLUDE_DIRS}"
+		)
 endif()
 
 if(WIN32)
@@ -27,19 +30,24 @@ if(WIN32)
 		set(DCMAKE_CUDA_ARCHITECTURES native)
 
 		message(STATUS "Importing opencv")
-		SET("OpenCV_DIR" "C:/opencv/build")
+		set("OpenCV_DIR" "C:/opencv/build")
 		find_package( OpenCV REQUIRED )
-		include_directories( ${OpenCV_INCLUDE_DIRS} )
+		include_directories(
+			"${CMAKE_SOURCE_DIR}"
+			"${CMAKE_CURRENT_SOURCE_DIR}"
+			"${OpenCV_INCLUDE_DIRS}"
+		)
 endif()
 
+
 if("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
-    message(STATUS "Building in Debug mode")
+	message(STATUS "Building in Debug mode")
 endif()
 
 if(MNIST)
-    project(MNIST LANGUAGES CXX CUDA)
+	project(MNIST LANGUAGES CXX CUDA)
 elseif(TEST_ALL)
-    project(Test_All LANGUAGES CXX CUDA)
+	project(Test_All LANGUAGES CXX CUDA)
 else()
 	project(CUDA_Optical_Flow LANGUAGES CXX CUDA)
 endif()
@@ -48,22 +56,27 @@ message("Project name: " ${CMAKE_PROJECT_NAME})
 
 
 if (MSVC)
-    message(STATUS "Building for Windows with MSVC")
-    set(_CRT_SECURE_NO_WARNINGS 1)
-    set(CURL_STATICLIB 1)
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /NODEFAULTLIB:LIBCMT")
+	message(STATUS "Building for Windows with MSVC")
+	set(_CRT_SECURE_NO_WARNINGS 1)
+	set(CURL_STATICLIB 1)
+	set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /NODEFAULTLIB:LIBCMT")
 endif()
 
 set(CPACK_PROJECT_NAME ${PROJECT_NAME})
 set(CPACK_PROJECT_VERSION ${PROJECT_VERSION})
 include(CPack)
 
-add_executable(${CMAKE_PROJECT_NAME} main.cu)
-target_link_libraries( ${CMAKE_PROJECT_NAME} ${OpenCV_LIBS})
+file(GLOB SOURCE_FILES_CPP "*.cpp")
+file(GLOB SOURCE_FILES_CU "*.cu")
+add_executable(${CMAKE_PROJECT_NAME} ${SOURCE_FILES_CPP} ${SOURCE_FILES_CU} main.cu)
+target_link_libraries( 
+	"${CMAKE_PROJECT_NAME}"
+	"${OpenCV_LIBS}"
+)
 
 target_compile_options(${CMAKE_PROJECT_NAME}
     PRIVATE $<$<COMPILE_LANGUAGE:CXX>: >
-    PRIVATE $<$<COMPILE_LANGUAGE:CUDA>: -Xcudafe --diag-suppress=esa_on_defaulted_function_ignored> # -g -G --ptxas-options=–allow-expensive-optimizations=true>
+    PRIVATE $<$<COMPILE_LANGUAGE:CUDA>: -Xcudafe --diag_suppress=esa_on_defaulted_function_ignored> # -g -G --ptxas-options=–allow-expensive-optimizations=true>
 )
 
 set_property(TARGET ${CMAKE_PROJECT_NAME} PROPERTY CUDA_SEPARABLE_COMPILATION ON)

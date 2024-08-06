@@ -1,0 +1,4 @@
+[ ] Go through the code, cleanup lose comments
+[ ] Identify major areas to be refactored
+[ ] Split up functions in new files
+[ ] See if you can substitute hardcoded types with templates
