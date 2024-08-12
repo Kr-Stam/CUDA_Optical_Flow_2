@@ -1,3 +1,5 @@
+#pragma once
+
 extern const float Dx_3x3[];
 extern const float Dx_3x3_t[];
 extern const float Dy_3x3[];

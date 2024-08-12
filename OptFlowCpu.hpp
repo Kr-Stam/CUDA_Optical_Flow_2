@@ -1,3 +1,5 @@
+#pragma once
+
 namespace cpu {
 
  /**
@@ -177,4 +179,6 @@ namespace cpu {
 	*/
 	void calc_optical_flow(const unsigned char *prev, unsigned char *next, int w, int h, float **optFlowPyramid, int level, int maxLevel);
 
+	//TODO: Add doxygen comment
+	void bilinear_filter_3ch(unsigned char *src, unsigned char *gray, unsigned char *dest, int w, int h, int ww, int wh, double sigmaS, double sigmaB);
 }

@@ -3,6 +3,8 @@
 #include "OptFlowCpu.hpp"
 #include "kernels.hpp"
 
+#include "OptFlowUtils.hpp"
+
 namespace cpu {
 	
 	//TODO: prefrli go ova vo util ili samo refaktoriraj da ne se koristi?
@@ -394,6 +396,72 @@ namespace cpu {
 			free(sumIyIt);
 
 			free(shifted);
+	}
+
+	void bilinear_filter_3ch(unsigned char *src, unsigned char *gray, unsigned char *dest, int w, int h, int ww, int wh, double sigmaS, double sigmaB)
+	{
+			double* gaus_mask = (double*) malloc(ww * wh * sizeof(double)); 
+			utils::generate_gaussian_kernel(sigmaS, ww, gaus_mask);
+
+			int hwh = wh >> 1;
+			int hww = ww >> 1;
+
+			for (int i = 0; i < h; i++)
+			{
+					for (int j = 0; j < w; j++)
+					{
+							int pos = i * w + j;
+							double wsb = 0;
+
+							int start_y = i - hwh;
+							int start_x = j - hww;
+
+							double f_ij = gray[pos * 3];
+
+							double tmp[3] = {0, 0, 0};
+							for (int m = 0; m < wh; m++)
+							{
+									int c_y = start_y + m;
+									if (c_y < 0 || c_y >= h)
+									{
+											continue;
+									}
+									for (int n = 0; n < ww; n++)
+									{
+											double sigmaB2 = sigmaB * sigmaB;
+
+											int c_x = start_x + n;
+
+											if (c_x < 0 || c_x >= w)
+											{
+													continue;
+											}
+
+											int c_pos = c_y * w + c_x;
+
+											double f_mn = gray[c_pos * 3];
+											double k = f_mn - f_ij;
+											double k2 = k * k;
+
+											double n_b = 1.0 / (2.0 * M_PI * sigmaB2) * pow(M_E, -0.5 * (k2) / sigmaB2);
+											double n_s = gaus_mask[m * ww + n];
+
+											wsb += n_b * n_s;
+											tmp[0] += src[c_pos * 3] * n_b * n_s;
+											tmp[1] += src[c_pos * 3 + 1] * n_b * n_s;
+											tmp[2] += src[c_pos * 3 + 2] * n_b * n_s;
+									}
+							}
+							tmp[0] /= wsb;
+							tmp[1] /= wsb;
+							tmp[2] /= wsb;
+
+							dest[pos * 3] = (unsigned char)tmp[0];
+							dest[pos * 3 + 1] = (unsigned char)tmp[1];
+							dest[pos * 3 + 2] = (unsigned char)tmp[2];
+					}
+			}
+			free(gaus_mask);
 	}
 
 }
