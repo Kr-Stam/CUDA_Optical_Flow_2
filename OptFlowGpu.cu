@@ -1941,8 +1941,8 @@ namespace gpu
 
 			// STEP 2
 			// Calculate sumIx2, sumIy2, sumIxIy, sumIxIt, sumIyIt
-			int ww = 9;
-			int wh = 9;
+			int ww = 19;
+			int wh = 19;
 			
 			float *sumIx2 = (float *)malloc(w * h * sizeof(float));
 			gpu::srm_1ch_float(Ix, Ix, w, h, ww, wh, sumIx2);

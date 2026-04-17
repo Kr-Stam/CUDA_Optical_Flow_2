@@ -5,51 +5,53 @@ if (MSVC)
   set(CMAKE_CXX_COMPILER "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.34.31933/bin/Hostx64/x64/cl.exe")
 endif()
 
-if (UNIX)
-		message(STATUS "Project is building for Linux")
-    set(CMAKE_CUDA_COMPILER /opt/cuda/bin/nvcc)
-		set(CMAKE_CXX_STANDARD 17)
-		set(CMAKE_CUDA_STANDARD 17)
-
-		set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-
-		message(STATUS "Importing opencv")
-		find_package( OpenCV REQUIRED )
-		include_directories(
-			"${CMAKE_SOURCE_DIR}"
-			"${OpenCV_INCLUDE_DIRS}"
-		)
-endif()
-
-if(WIN32)
-    message(STATUS "Project is building for Windows")
-    set(CUDA_TOOLKIT_ROOT_DIR "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.3")
-    set(CMAKE_CUDA_COMPILER "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.3/bin/nvcc.exe")
-		set(CMAKE_CXX_STANDARD 17)
-		set(CMAKE_CUDA_STANDARD 17)
-		set(DCMAKE_CUDA_ARCHITECTURES native)
-
-		message(STATUS "Importing opencv")
-		set("OpenCV_DIR" "C:/opencv/build")
-		find_package( OpenCV REQUIRED )
-		include_directories(
-			"${CMAKE_SOURCE_DIR}"
-			"${CMAKE_CURRENT_SOURCE_DIR}"
-			"${OpenCV_INCLUDE_DIRS}"
-		)
-endif()
-
-
-if("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
-	message(STATUS "Building in Debug mode")
-endif()
-
 if(MNIST)
 	project(MNIST LANGUAGES CXX CUDA)
 elseif(TEST_ALL)
 	project(Test_All LANGUAGES CXX CUDA)
 else()
 	project(CUDA_Optical_Flow LANGUAGES CXX CUDA)
+endif()
+
+if (UNIX)
+	message(STATUS "Project is building for Linux")
+	set(CMAKE_CUDA_COMPILER /opt/cuda/bin/nvcc)
+	set(CMAKE_CXX_STANDARD 17)
+	set(CMAKE_CUDA_STANDARD 17)
+
+	set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+	message(STATUS "Importing opencv")
+
+	set("OpenCV_DIR" "/usr/lib/cmake/opencv4")
+	find_package( OpenCV REQUIRED )
+	include_directories(
+		"${CMAKE_SOURCE_DIR}"
+		"${OpenCV_INCLUDE_DIRS}"
+	)
+endif()
+
+if(WIN32)
+    message(STATUS "Project is building for Windows")
+    set(CUDA_TOOLKIT_ROOT_DIR "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.3")
+    set(CMAKE_CUDA_COMPILER "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v12.3/bin/nvcc.exe")
+	set(CMAKE_CXX_STANDARD 17)
+	set(CMAKE_CUDA_STANDARD 17)
+	set(DCMAKE_CUDA_ARCHITECTURES native)
+
+	message(STATUS "Importing opencv")
+	set("OpenCV_DIR" "C:/opencv/build")
+	find_package( OpenCV REQUIRED )
+	include_directories(
+		"${CMAKE_SOURCE_DIR}"
+		"${CMAKE_CURRENT_SOURCE_DIR}"
+		"${OpenCV_INCLUDE_DIRS}"
+	)
+endif()
+
+
+if("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
+	message(STATUS "Building in Debug mode")
 endif()
 
 message("Project name: " ${CMAKE_PROJECT_NAME})
@@ -80,7 +82,7 @@ target_compile_options(${CMAKE_PROJECT_NAME}
 )
 
 set_property(TARGET ${CMAKE_PROJECT_NAME} PROPERTY CUDA_SEPARABLE_COMPILATION ON)
-set_property(TARGET ${CMAKE_PROJECT_NAME} PROPERTY CUDA_ARCHITECTURES 61 75 87 80) # Running on GTX 1080 Ti, GTX 1660 Ti, and Jetson AGX Orin
+set_property(TARGET ${CMAKE_PROJECT_NAME} PROPERTY CUDA_ARCHITECTURES 75 87 80)
 
 if("${CMAKE_BUILD_TYPE}" STREQUAL "Debug")
     target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE _DEBUG)
